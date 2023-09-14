@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Welcome</title>
+  <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+  <style>
+  /* ... Existing styles ... */
+
+  /* Customize modal background */
+  #lockoutModal .modal-content {
+    background-color: #f8f9fa; /* Background color for the modal */
+    border: none; /* Remove border */
+    border-radius: 10px; /* Rounded corners */
+    box-shadow: 0 0 10px rgba(0, 0, 0, 0.2); /* Add a slight shadow */
+  }
+
+  /* Customize modal body */
+  #lockoutModal .modal-body {
+    padding: 20px; /* Add some padding */
+  }
+
+  /* Customize modal text */
+  #lockoutMessage {
+    font-size: 18px; /* Increase font size */
+    color: #dc3545; /* Red color for emphasis */
+    font-weight: bold; /* Make the text bold */
+  }
+
+  /* Customize modal button */
+  #lockoutModal .btn {
+    background-color: #dc3545; /* Red color for the button */
+    color: #fff; /* White text color */
+    border-radius: 5px; /* Rounded corners */
+    padding: 8px 20px; /* Add some padding */
+    font-size: 16px; /* Increase font size */
+    font-weight: bold; /* Make the text bold */
+  }
+
+  body {
+    background-color: #f8f9fa;
+  }
+  .container {
+    text-align: center;
+    margin-top: 100px;
+  }
+  .logout-btn {
+    margin-top: 20px;
+  }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>{ Welcome! }</h1>
+<% if (user) { %>
+  <div class="card">
+    <div class="card-body">
+      <h5 class="card-title">Hello, <%= user.username %></h5>
+      <p>Your Role: <%= user.role %></p>
+      <a href="/logout" class="btn btn-danger logout-btn">Logout</a>
+    </div>
+  </div>
+<% } else { %>
+  <div class="card">
+    <div class="card-body">
+      <p class="card-text">
+        <span class="text-danger" style="font-size: 20px; font-weight: bold;">
+          You are not logged in. Please
+        </span>
+        <a href="/login" class="btn btn-danger login-btn">
+          Login Now
+        </a>
+      </p>
+    </div>
+  </div>
+<% } %>
+
+  </div>
+</body>
+</html>
