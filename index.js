@@ -6,8 +6,9 @@ const session = require('express-session');
 const mysql = require('mysql2/promise');
 const winston = require('winston');
 const moment = require('moment');
-const crypto = require('crypto'); // Tambahkan ini
-const cookieParser = require('cookie-parser'); // Tambahkan ini
+const crypto = require('crypto'); 
+const nodemailer = require('nodemailer');
+const cookieParser = require('cookie-parser'); 
 
 require('dotenv').config();
 
@@ -47,6 +48,11 @@ app.use(session({
   resave: false,
   saveUninitialized: true
 }));
+
+// Generate random reset token
+function generateResetToken() {
+  return crypto.randomBytes(20).toString('hex');
+}
 
 app.use((req, res, next) => {
   req.session.failedAttempts = req.session.failedAttempts || 0;
@@ -209,6 +215,97 @@ app.get('/dosen', (req, res) => {
 function generateRememberToken() {
   return crypto.randomBytes(40).toString('hex');
 }
+
+// Rute untuk menampilkan halaman reset
+app.get('/reset', (req, res) => {
+  res.render('reset', { message: null });
+});
+
+// Rute untuk menangani pengiriman formulir reset password
+app.post('/reset', async (req, res) => {
+  const { email } = req.body;
+
+  // Kode untuk mengirim email reset password
+  try {
+    // Konfigurasi transporter email (gantilah dengan konfigurasi SMTP yang sesuai)
+    const transporter = nodemailer.createTransport({
+      service: 'Gmail',
+      auth: {
+        user: process.env.EMAIL_USERNAME,
+        pass: process.env.EMAIL_PASSWORD
+      }
+    });
+
+    // Konfigurasi email
+    const mailOptions = {
+      from: 'rendi.nicolas.mahendra@gmail.com',
+      to: email,
+      subject: 'Reset Password',
+      text: 'Silakan klik tautan berikut untuk mereset kata sandi Anda: http://localhost:3000/reset-password/',
+    };
+
+    // Kirim email
+    await transporter.sendMail(mailOptions);
+
+    // Tampilkan pesan sukses
+    res.render('reset', { message: 'Email reset kata sandi telah dikirim. Silakan periksa kotak masuk Anda.' });
+  } catch (error) {
+    console.error(error);
+    res.render('reset', { message: 'Gagal mengirim email reset kata sandi. Silakan coba lagi nanti.' });
+  }
+});
+
+
+// Rute untuk reset password
+app.get('/reset-password/:token', async (req, res) => {
+  const { token } = req.params;
+
+  try {
+    // Lakukan validasi token di sini, periksa apakah token valid dan belum kedaluwarsa.
+    const user = await validateResetToken(token); // Implementasikan fungsi ini
+
+    if (user) {
+      // Jika token valid, tampilkan halaman reset password.
+      res.render('reset-password', { token, message: null });
+    } else {
+      // Jika tidak valid, tampilkan pesan kesalahan.
+      res.render('reset-password', { token: null, message: 'Token reset password tidak valid atau sudah kedaluwarsa.' });
+    }
+  } catch (error) {
+    console.error(error);
+    res.status(500).send('Internal server error');
+  }
+});
+
+app.post('/reset-password/:token', async (req, res) => {
+  const { token } = req.params;
+  const { newPassword } = req.body;
+
+  try {
+    // Lakukan validasi token di sini, periksa apakah token valid dan belum kedaluwarsa.
+    const user = await validateResetToken(token); // Implementasikan fungsi ini
+
+    if (user) {
+      // Reset password untuk pengguna yang sesuai dengan token.
+      const hashedPassword = bcrypt.hashSync(newPassword, 10);
+      await resetUserPassword(user.id, hashedPassword); // Implementasikan fungsi ini
+
+      // Hapus token reset password dari database (karena token hanya bisa digunakan sekali).
+      await deleteResetToken(token); // Implementasikan fungsi ini
+
+      // Redirect pengguna ke halaman login atau tampilkan pesan sukses.
+      res.redirect('/login');
+    } else {
+      // Token tidak valid, tampilkan pesan kesalahan.
+      res.render('reset-password', { token: null, message: 'Token reset password tidak valid atau sudah kedaluwarsa.' });
+    }
+  } catch (error) {
+    console.error(error);
+    res.status(500).send('Internal server error');
+  }
+});
+
+
 
 // Store remember token in the database
 async function storeRememberToken(userId, rememberToken) {
