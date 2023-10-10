@@ -6,9 +6,13 @@ const session = require('express-session');
 const mysql = require('mysql2/promise');
 const winston = require('winston');
 const moment = require('moment');
+const crypto = require('crypto'); // Tambahkan ini
+const cookieParser = require('cookie-parser'); // Tambahkan ini
+
 require('dotenv').config();
 
 const app = express();
+app.use(cookieParser()); // Gunakan middleware cookie-parser
 
 // Konfigurasi Database
 const pool = mysql.createPool({
@@ -38,7 +42,6 @@ const logger = winston.createLogger({
 app.set('view engine', 'ejs');
 app.use(express.static('public'));
 app.use(bodyParser.urlencoded({ extended: true }));
-
 app.use(session({
   secret: process.env.SESSION_SECRET,
   resave: false,
@@ -46,10 +49,10 @@ app.use(session({
 }));
 
 app.use((req, res, next) => {
-    req.session.failedAttempts = req.session.failedAttempts || 0;
-    next();
-  });
-  
+  req.session.failedAttempts = req.session.failedAttempts || 0;
+  next();
+});
+
 // Routing
 app.get('/', (req, res) => {
   if (!req.session.user) {
@@ -58,39 +61,33 @@ app.get('/', (req, res) => {
 
   // Cek peran pengguna dan arahkan sesuai peran
   if (req.session.role === 'Admin') {
-    res.render('admin'); // Halaman admin
+    res.render('admin');
   } else if (req.session.role === 'Dosen') {
-    res.render('dosen'); // Halaman dosen
+    res.render('dosen');
   } else if (req.session.role === 'Mahasiswa') {
-    res.render('index', { user: req.session.user }); // Halaman mahasiswa dengan variabel user
+    res.render('index', { user: req.session.user });
   }
 });
-
 
 app.get('/login', (req, res) => {
   res.render('login', { message: req.session.message });
   req.session.message = null; // Clear the message after rendering
 });
 
-
 app.post('/login', async (req, res) => {
-  const { emailOrUsername, password } = req.body; // Ganti "username" menjadi "emailOrUsername"
+  const { emailOrUsername, password, remember_me } = req.body;
 
   try {
     const connection = await pool.getConnection();
     let [rows] = [];
 
-    // Periksa apakah input adalah email atau username
     if (emailOrUsername && typeof emailOrUsername === 'string') {
       if (emailOrUsername.includes('@')) {
-        // Input adalah email
         [rows] = await connection.execute('SELECT * FROM Users WHERE email = ?', [emailOrUsername]);
       } else {
-        // Input adalah username
         [rows] = await connection.execute('SELECT * FROM Users WHERE username = ?', [emailOrUsername]);
       }
     } else {
-      // Input tidak valid, atasi dengan memberikan pesan kesalahan
       req.session.message = 'Invalid email or username';
       return res.redirect('/login');
     }
@@ -100,43 +97,41 @@ app.post('/login', async (req, res) => {
     if (rows.length > 0) {
       const user = rows[0];
       if (bcrypt.compareSync(password, user.password)) {
-        // Reset failed login attempts setelah berhasil login
         req.session.failedAttempts = 0;
-
-        // Set user info in session
         req.session.user = user;
+        req.session.role = user.role;
 
-        // Set user role in session
-        req.session.role = user.role; // Ambil peran dari basis data
-
-        // Log aktivitas masuk yang berhasil
         logger.info(`Pengguna ${user.username} berhasil masuk sebagai ${user.role}`);
 
-        // Berdasarkan peran pengguna, arahkan ke rute yang sesuai
+        // Jika "Remember Me" dicentang, set cookie remember_token
+        if (remember_me) {
+          const rememberToken = generateRememberToken();
+          await storeRememberToken(user.id, rememberToken);
+
+          // Set cookie dengan remember token (atur waktu kadaluwarsa sesuai kebutuhan Anda)
+          res.cookie('remember_token', rememberToken, { maxAge: 30 * 24 * 60 * 60 * 1000 }); // 30 hari
+        }
+
+        // Redirect sesuai peran pengguna
         if (req.session.role === 'Admin') {
-          res.redirect('/admin'); // Redirect ke halaman admin
+          res.redirect('/admin');
         } else if (req.session.role === 'Dosen') {
-          res.redirect('/dosen'); // Redirect ke halaman dosen
+          res.redirect('/dosen');
         } else if (req.session.role === 'Mahasiswa') {
-          res.redirect('/'); // Redirect ke halaman utama
+          res.redirect('/');
         }
       } else {
-        // Increment failed login attempts
         req.session.failedAttempts = (req.session.failedAttempts || 0) + 1;
-
-        // Check for lockout after 3 failed attempts
         if (req.session.failedAttempts >= 3) {
           if (req.session.lockedUntil && req.session.lockedUntil > Date.now()) {
             const remainingTime = Math.ceil((req.session.lockedUntil - Date.now()) / 1000);
             return res.status(403).send(`You are locked out. Please try again in ${remainingTime} seconds.`);
           } else {
-            req.session.lockedUntil = Date.now() + 1 * 60 * 1000; // Lock user for 5 minutes
+            req.session.lockedUntil = Date.now() + 5 * 60 * 1000; // Kunci pengguna selama 5 menit
           }
         }
 
-        // Log aktivitas masuk yang gagal
         logger.error(`Gagal masuk untuk pengguna dengan nama ${emailOrUsername}`);
-
         req.session.message = 'Invalid email or password';
         res.redirect('/login');
       }
@@ -151,91 +146,109 @@ app.post('/login', async (req, res) => {
   }
 });
 
-
-
 // Middleware untuk menangani pemblokiran
 app.use((req, res, next) => {
-  // Check if user is locked out
   if (req.session.lockedUntil && req.session.lockedUntil > Date.now()) {
     const remainingTime = Math.ceil((req.session.lockedUntil - Date.now()) / 1000);
     req.session.message = `You are locked out. Please try again in ${remainingTime} seconds.`;
 
-    // Jika pengguna mencoba mengakses halaman lain selain /login
     if (req.session.user === null || req.session.user === undefined) {
       return res.redirect('/login');
     } else {
-      // Menghapus req.session.lockedUntil setelah waktu tertentu
       setTimeout(() => {
         delete req.session.lockedUntil;
-      }, 5 * 60 * 1000); // Menghapus lockedUntil setelah 5 menit
+      }, 5 * 60 * 1000); // Hapus lockedUntil setelah 5 menit
     }
   }
 
   next();
 });
 
-
 app.post('/register', async (req, res) => {
-    const { username, email, password, role } = req.body;
-    const hashedPassword = bcrypt.hashSync(password, 10);
-  
-    try {
-      const connection = await pool.getConnection();
-      await connection.execute('INSERT INTO Users (username, email, password, role, createdAt, updatedAt) VALUES (?, ?, ?, ?, NOW(), NOW())', [username, email, hashedPassword, role]);
-      connection.release();
+  const { username, email, password, role } = req.body;
+  const hashedPassword = bcrypt.hashSync(password, 10);
 
-      // Log aktivitas register yang berhasil
-      logger.info(`Pengguna ${username} berhasil register dengan peran ${role}`);
-  
-      res.redirect('/login');
-    } catch (error) {
-      console.error(error);
-      req.session.message = 'Failed to register user'; // Set error message
+  try {
+    const connection = await pool.getConnection();
+    await connection.execute('INSERT INTO Users (username, email, password, role, createdAt, updatedAt) VALUES (?, ?, ?, ?, NOW(), NOW())', [username, email, hashedPassword, role]);
+    connection.release();
 
-      // Log aktivitas gagal register
-      logger.error(`Gagal register untuk pengguna dengan nama ${username}`);
+    logger.info(`Pengguna ${username} berhasil register dengan peran ${role}`);
 
-      res.redirect('/register'); // Redirect back to the register page
+    res.redirect('/login');
+  } catch (error) {
+    console.error(error);
+    req.session.message = 'Failed to register user';
+
+    logger.error(`Gagal register untuk pengguna dengan nama ${username}`);
+
+    res.redirect('/register');
+  }
+});
+
+app.get('/register', (req, res) => {
+  res.render('register', { message: req.session.message });
+  req.session.message = null;
+});
+
+app.get('/admin', (req, res) => {
+  if (!req.session.user || req.session.role !== 'Admin') {
+    return res.status(403).send('Access denied');
+  }
+  res.render('admin', { user: req.session.user });
+});
+
+app.get('/dosen', (req, res) => {
+  if (!req.session.user || req.session.role !== 'Dosen') {
+    return res.status(403).send('Access denied');
+  }
+  res.render('dosen', { user: req.session.user });
+});
+
+// Generate random remember token
+function generateRememberToken() {
+  return crypto.randomBytes(40).toString('hex');
+}
+
+// Store remember token in the database
+async function storeRememberToken(userId, rememberToken) {
+  try {
+    const connection = await pool.getConnection();
+    await connection.execute('UPDATE Users SET remember_token = ? WHERE id = ?', [rememberToken, userId]);
+    connection.release();
+  } catch (error) {
+    console.error(error);
+    // Tangani kesalahan dengan benar
+  }
+}
+
+app.get('/logout', (req, res) => {
+  if (req.cookies.remember_token) {
+    // Hapus cookie remember_token
+    res.clearCookie('remember_token');
+  }
+
+  if (req.session.user) {
+    const { username, role } = req.session.user;
+    logger.info(`Pengguna ${username} berhasil logout dari peran ${role}`);
+  }
+
+  req.session.message = {
+    type: 'logout',
+    text: 'You have successfully logged out.',
+  };
+
+  const logoutMessage = req.session.message;
+
+  req.session.destroy((err) => {
+    if (err) {
+      console.error(err);
     }
-  });
-  
-  app.get('/register', (req, res) => {
-    res.render('register', { message: req.session.message }); // Send the message to the register view
-    req.session.message = null; // Clear the message after rendering
-  });
 
-  app.get('/admin', (req, res) => {
-    if (!req.session.user || req.session.role !== 'Admin') {
-      return res.status(403).send('Access denied'); // Mengizinkan hanya pengguna dengan peran Admin
-    }
-    res.render('admin', { user: req.session.user }); // Anda perlu melewatkan user ke template EJS
+    res.redirect(`/login?message=${JSON.stringify(logoutMessage)}`);
   });
+});
 
-  app.get('/dosen', (req, res) => {
-    if (!req.session.user || req.session.role !== 'Dosen') {
-      return res.status(403).send('Access denied'); // Mengizinkan hanya pengguna dengan peran Admin
-    }
-    res.render('dosen', { user: req.session.user }); // Anda perlu melewatkan user ke template EJS
-  });
-  
-  
-  
-  // Rute logout
-  app.get('/logout', (req, res) => {
-    if (req.session.user) {
-      const { username, role } = req.session.user;
-      // Log aktivitas logout yang berhasil
-      logger.info(`Pengguna ${username} berhasil logout dari peran ${role}`);
-    }
-
-    req.session.destroy((err) => {
-      if (err) {
-        console.error(err);
-      }
-      res.redirect('/login');
-    });
-  });
-  
 app.listen(3000, () => {
   console.log('Server berjalan pada port 3000');
 });
